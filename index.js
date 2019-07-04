@@ -1,111 +1,149 @@
 const neo4j = require('neo4j-driver').v1;
-const driver = neo4j.driver("bolt://localhost", neo4j.auth.basic("neo4j", "12345"));
-const session = driver.session();
-// console.log(session)
-
 import faker from 'faker';
-
 import createUsers from './factories/user.factory';
-import { randomInteger } from './utils'
+import { randomInteger } from './utils';
 
-const USERS_COUNT = 2000;
+const USERS_COUNT = 100;
 const MIN_FRIENDS = 3;
 const MAX_FRIENDS = 10;
+
+const MIN_RELATIONS_COUNT = 1;
+const MAX_RELATIONS_COUNT = 19;
 
 function uniquenessGenerator(count, getFieldFunction) {
   const set = new Set();
   while (set.size !== count) {
-    const generatedValue = getFieldFunction(set);
-    set.add(generatedValue)
+    const generatedValue = getFieldFunction();
+    set.add(generatedValue);
   }
   return Array.from(set);
 }
 
-const phoneNumbers = uniquenessGenerator(USERS_COUNT, () => {
-  return faker.phone.phoneNumber("8(999)###-##-##");
-});
+function buildCreatePersonsQuery(persons) {
+  return persons
+    .map(person => {
+      const { firstName, lastName, phoneNumber } = person;
+      const personHead = `${firstName}${lastName}`.replace(/[^A-Za-z]/g, '');
+      return `CREATE (${personHead}:Person {name: '${firstName.replace(
+        /[^A-Za-z]/g,
+        ''
+      )} ${lastName.replace(/[^A-Za-z]/g, '')}', firstName:'${firstName.replace(
+        /[^A-Za-z]/g,
+        ''
+      )}', lastName:'${lastName.replace(
+        /[^A-Za-z]/g,
+        ''
+      )}', phoneNumber:'${phoneNumber}'})`;
+    })
+    .join('\n');
+}
 
-const fullNames = uniquenessGenerator(USERS_COUNT, () => {
-  return `${faker.name.firstName()} ${faker.name.lastName()}`;
-})
+function buildRelationsQuery(persons) {
+  return persons
+    .map(person => {
+      const { firstName, lastName, friends } = person;
+      const personHead = `${firstName}${lastName}`.replace(/[^A-Za-z]/g, '');
+      if (friends.length === 0) {
+        console.log('friends', friends);
+      }
+      const friendRelationQuery = friends.map(
+        ({ friendId, relationsCount }) => {
+          const friend = persons.find(person => person.id === friendId);
+          const { firstName, lastName } = friend;
+          const fHead = `${firstName}${lastName}`.replace(/[^A-Za-z]/g, '');
+          if (!relationsCount) {
+            console.log('relationsCount', relationsCount);
+          }
+          const relationsIds = [...Array(relationsCount).keys()];
+          const relationQuery = relationsIds
+            .map(id => {
+              return `(${personHead})-[:REL_${id + 1}]->(${fHead})`;
+            })
+            .join(',');
+          return relationQuery;
+        }
+      );
+      return 'CREATE' + friendRelationQuery;
+    })
+    .join('\n');
+}
 
-const users = createUsers(USERS_COUNT, { firstName: fullNames, lastName: fullNames, phoneNumber: phoneNumbers });
+function generateUserFriends(user, users) {
+  const result = uniquenessGenerator(
+    randomInteger(MIN_FRIENDS, MAX_FRIENDS),
+    () => {
+      return randomInteger(1, users.length);
+    }
+  ).filter(friendId => friendId !== user.id);
+  if (result.length === 0) {
+    return generateUserFriends(user, users);
+  } else {
+    return result;
+  }
+}
 
-const usersWithFriends = users.map(user => {
-  const userFriends = uniquenessGenerator(randomInteger(MIN_FRIENDS, MAX_FRIENDS), () => {
-    return randomInteger(1, users.length);
+function generateUsers() {
+  const phoneNumbers = uniquenessGenerator(USERS_COUNT, () => {
+    return faker.phone.phoneNumber('8(999)###-##-##');
   });
 
-  return {
-    ...user,
-    friendsIds: userFriends.filter(friendId => friendId !== user.id),
-  };
-})
+  const fullNames = uniquenessGenerator(USERS_COUNT, () => {
+    return `${faker.name.firstName()} ${faker.name.lastName()}`;
+  });
 
-async function createPersons(persons) {
-  const personQuery = persons.map((person, personIndex) => {
-    const { firstName, lastName, friendsIds, phoneNumber } = person;
-    const personHead = `${firstName}${lastName}`.replace(/[^A-Za-z]/g, '');
-    return `CREATE (${personHead}:Person {name: '${firstName.replace(/[^A-Za-z]/g, '')} ${lastName.replace(/[^A-Za-z]/g, '')}', firstName:'${firstName.replace(/[^A-Za-z]/g, '')}', lastName:'${lastName.replace(/[^A-Za-z]/g, '')}', phoneNumber:'${phoneNumber}'})`
-  }).join("\n");
-  const friendsQuery = persons.map((person, personIndex) => {
-    const { firstName, lastName, friendsIds, phoneNumber } = person;
-    const isPersonLast = personIndex === persons.length - 1;
-    const personHead = `${firstName}${lastName}`.replace(/[^A-Za-z]/g, '');
-    return friendsIds.map((friendId, friendIndex) => {
-      const isFriendLast = friendIndex === friendsIds.length - 1;
-      const friend = persons.find(person => person.id === friendId);
-      const { firstName, lastName } = friend;
-      const fHead = `${firstName}${lastName}`.replace(/[^A-Za-z]/g, '');
-      if (isPersonLast && isFriendLast) {
-        return `(${personHead})-[:FRIEND_WITH]->(${fHead})`;
-      }
-      return `(${personHead})-[:FRIEND_WITH]->(${fHead}),`;
-    })
-  }).flat().join("\n");
+  const users = createUsers(USERS_COUNT, {
+    firstName: fullNames,
+    lastName: fullNames,
+    phoneNumber: phoneNumbers
+  });
+  const usersWithFriends = users.map(user => {
+    const userFriends = generateUserFriends(user, users);
 
+    return {
+      ...user,
+      friends: userFriends.map(friendId => ({
+        friendId,
+        relationsCount: randomInteger(MIN_RELATIONS_COUNT, MAX_RELATIONS_COUNT)
+      }))
+    };
+  });
+
+  return usersWithFriends;
+}
+
+async function fillDB(usersWithFriends) {
+  
+  const createPersonsQuery = buildCreatePersonsQuery(usersWithFriends);
+  const relationsQuery = buildRelationsQuery(usersWithFriends);
+  console.log('createPersonsQuery');
+  // console.log(createPersonsQuery)
+  console.log('---------');
+  console.log('relationsQuery');
+  // console.log(relationsQuery)
+
+  const driver = neo4j.driver(
+    'bolt://localhost',
+    neo4j.auth.basic('neo4j', '1234')
+  );
+  const session = driver.session();
   try {
+    await session.run('MATCH (n) DETACH DELETE n'); //clean db
     const result = await session.run(`
-        ${personQuery}
-        CREATE
-        ${friendsQuery}
+        ${createPersonsQuery}
+        ${relationsQuery}
     `);
-    console.log(result)
+    // console.log(result)
   } catch (error) {
-    console.log(error)
+    console.log(error);
+  } finally {
+    session.close();
+    driver.close();
   }
-  return 'DONE';
 }
 
-async function createPersonsRelations(persons) {
-  for await (let user of persons) {
-    const { firstName, lastName, friendsIds, phoneNumber } = user;
-    const userHead = `${firstName}${lastName}`.replace(/[^A-Za-z]/g, '');
-    const friendsHeads = friendsIds.map(friendId => {
-      const friend = persons.find(person => person.id === friendId);
-      const { firstName, lastName } = friend;
-      return `${firstName}${lastName}`.replace(/[^A-Za-z]/g, '');
-    })
-    try {
-      const result = await session.run(`
-        CREATE
-          ${friendsHeads.map((fHead, index) => {
-        const isLast = index === friendsHeads.length - 1;
-        if (isLast) {
-          return `(${userHead})-[:FRIEND_WITH]->(${fHead})`;
-        }
-        return `(${userHead})-[:FRIEND_WITH]->(${fHead}),`;
-      }).join("\n")}
-      `);
-      console.log(result)
-    } catch (error) {
-      console.log(error)
-    }
-  }
+async function main() {
+  const users = generateUsers();
+  await fillDB(users);
 }
-(async function name(params) {
-  await createPersons(usersWithFriends);
-  console.log('DONE');
-  // await createPersonsRelations(usersWithFriends);
-  session.close();
-})();
+
+main();
