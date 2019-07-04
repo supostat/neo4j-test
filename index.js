@@ -112,7 +112,6 @@ function generateUsers() {
 }
 
 async function fillDB(usersWithFriends) {
-  
   const createPersonsQuery = buildCreatePersonsQuery(usersWithFriends);
   const relationsQuery = buildRelationsQuery(usersWithFriends);
   console.log('createPersonsQuery');
@@ -132,9 +131,9 @@ async function fillDB(usersWithFriends) {
         ${createPersonsQuery}
         ${relationsQuery}
     `);
-    // console.log(result)
+    console.log('Success');
   } catch (error) {
-    console.log(error);
+    console.log('Error: ', error);
   } finally {
     session.close();
     driver.close();
